@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>FPL Live Table — bootstrap-static</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- DataTables CSS & JS (CDN). Uses jQuery dependency -->
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+  <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.4.1/css/buttons.dataTables.min.css">
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 12px; }
+    h1 { margin-bottom: 6px; }
+    #loading { color: #666; margin-bottom: 10px; }
+    table.dataTable tbody td { white-space: nowrap; }
+    thead input { width: 100%; box-sizing: border-box; }
+    .small { font-size: 0.9rem; color:#555; }
+  </style>
+</head>
+<body>
+  <h1>FPL Live Table</h1>
+  <div class="small">Data source: <code>https://fantasy.premierleague.com/api/bootstrap-static/</code></div>
+  <div id="loading">Loading players… (this fetches live from the FPL API)</div>
+  <table id="players" class="display" style="width:100%">
+    <thead>
+      <tr id="colHeaders">
+        <!-- headers inserted by JS -->
+      </tr>
+      <tr id="filterRow">
+        <!-- filter inputs inserted by JS -->
+      </tr>
+    </thead>
+    <tbody id="bodyRows"></tbody>
+  </table>
+
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdn.datatables.net/buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+  <script src="https://cdn.datatables.net/buttons/2.4.1/js/buttons.html5.min.js"></script>
+  <script>
+  // ------------------------
+  // CONFIG / MAPPINGS
+  // ------------------------
+  const TEAM_MAP = {
+    1: 'ARS',2:'AVL',3:'BUR',4:'BOU',5:'BRE',6:'BHA',7:'CHE',8:'CRY',9:'EVE',10:'FUL',
+    11:'LEE',12:'LIV',13:'MCI',14:'MUN',15:'NEW',16:'NFO',17:'SUN',18:'TOT',19:'WHU',20:'WOL'
+  };
+  const POS_MAP = { 1:'GK', 2:'Def', 3:'Mid', 4:'Fwd' };
+
+  // Columns we will show. Key is output column title, value is function to get cell value from element object (el).
+  // If the bootstrap-static lacks a field we still show '-' so table structure is stable.
+  const COLUMNS = [
+    { title: "Name", key: el => (el.web_name || (el.first_name? el.first_name + " " + el.second_name : el.name)) },
+    { title: "Team", key: el => TEAM_MAP[el.team_code] || TEAM_MAP[el.team] || el.team_code || el.team || '-' },
+    { title: "Pos", key: el => POS_MAP[el.element_type] || '-' },
+    { title: "Price (£)", key: el => (el.now_cost ? (el.now_cost/10).toFixed(1) : '-') },
+    { title: "Total Points", key: el => (el.total_points != null ? el.total_points : '-') },
+    { title: "p/G (PPG)", key: el => (el.points_per_game != null ? Number(el.points_per_game).toFixed(2) : '-') },
+    { title: "Selected by (%)", key: el => (el.selected_by_percent != null ? el.selected_by_percent : '-') },
+    { title: "Status", key: el => el.status || '-' },
+    { title: "Minutes", key: el => (el.minutes != null ? el.minutes : '-') },
+    { title: "Goals", key: el => (el.goals_scored != null ? el.goals_scored : '-') },
+    { title: "Assists", key: el => (el.assists != null ? el.assists : '-') },
+    { title: "CS", key: el => (el.clean_sheets != null ? el.clean_sheets : '-') },
+    { title: "GC", key: el => (el.goals_conceded != null ? el.goals_conceded : '-') },
+    { title: "OG", key: el => (el.own_goals != null ? el.own_goals : '-') },
+    { title: "PK Saved", key: el => (el.penalties_saved != null ? el.penalties_saved : '-') },
+    { title: "PK Miss", key: el => (el.penalties_missed != null ? el.penalties_missed : '-') },
+    { title: "YC", key: el => (el.yellow_cards != null ? el.yellow_cards : '-') },
+    { title: "RC", key: el => (el.red_cards != null ? el.red_cards : '-') },
+    { title: "Saves", key: el => (el.saves != null ? el.saves : '-') },
+    { title: "Bonus", key: el => (el.bonus != null ? el.bonus : '-') },
+    { title: "BPS", key: el => (el.bps != null ? el.bps : '-') },
+    { title: "Influence", key: el => (el.influence != null ? Number(el.influence).toFixed(2) : '-') },
+    { title: "Creativity", key: el => (el.creativity != null ? Number(el.creativity).toFixed(2) : '-') },
+    { title: "Threat", key: el => (el.threat != null ? Number(el.threat).toFixed(2) : '-') },
+    { title: "ICT Index", key: el => (el.ict_index != null ? Number(el.ict_index).toFixed(2) : '-') },
+    { title: "Def Con", key: el => (el.element_type==1 ? '-' : (el.defence_contribution != null ? el.defence_contribution : (el.defense_contribution != null ? el.defense_contribution : '-'))) },
+    // xG, xA, xGI, xG90, xA90, xGI90 may exist in the bootstrap-static fields or not -- show if present
+    { title: "xG", key: el => (el.xG != null ? Number(el.xG).toFixed(3) : (el.expected_goals != null ? Number(el.expected_goals).toFixed(3) : '-')) },
+    { title: "xA", key: el => (el.xA != null ? Number(el.xA).toFixed(3) : (el.expected_assists != null ? Number(el.expected_assists).toFixed(3) : '-')) },
+    { title: "xGI", key: el => (el.xGI != null ? Number(el.xGI).toFixed(3) : ( (el.xG!=null||el.xA!=null) ? ( ( (el.xG||0) + (el.xA||0) ).toFixed ? ( ( (el.xG||0) + (el.xA||0) ).toFixed(3) ) : '-' ) : '-' )) },
+    { title: "xG90", key: el => (el.xG90 != null ? Number(el.xG90).toFixed(3) : '-') },
+    { title: "xA90", key: el => (el.xA90 != null ? Number(el.xA90).toFixed(3) : '-') },
+    { title: "xGI90", key: el => (el.xGI90 != null ? Number(el.xGI90).toFixed(3) : '-') },
+    { title: "Starts", key: el => (el.starts != null ? el.starts : '-') },
+    { title: "Form", key: el => (el.form != null ? Number(el.form).toFixed(2) : '-') },
+    { title: "Minutes/90", key: el => { if (el.minutes != null && el.minutes>=0) return (el.minutes/90).toFixed(2); return '-'; } },
+    { title: "Pts / £ (Pts/$)", key: el => { if (el.total_points!=null && el.now_cost) return (el.total_points / (el.now_cost/10)).toFixed(3); return '-'; } }
+  ];
+
+  // Helper to safely read deep fields
+  function safeGet(obj, path, defaultVal='-') {
+    try { const parts = path.split('.'); let cur = obj; for (const p of parts) { cur = cur[p]; if (cur===undefined) return defaultVal; } return cur; } catch(e){ return defaultVal; }
+  }
+
+  // Build table header and filter row
+  function buildHeader() {
+    const headerRow = document.getElementById('colHeaders');
+    const filterRow = document.getElementById('filterRow');
+    COLUMNS.forEach(col => {
+      const th = document.createElement('th');
+      th.textContent = col.title;
+      headerRow.appendChild(th);
+
+      const thFilter = document.createElement('th');
+      const input = document.createElement('input');
+      input.setAttribute('placeholder', 'Filter ' + col.title);
+      input.dataset.col = headerRow.children.length - 1;
+      thFilter.appendChild(input);
+      filterRow.appendChild(thFilter);
+    });
+  }
+
+  // Fetch bootstrap static and populate table
+  async function loadAndPopulate() {
+    const url = 'https://fantasy.premierleague.com/api/bootstrap-static/';
+    document.getElementById('loading').textContent = 'Fetching ' + url;
+    let res;
+    try {
+      res = await fetch(url);
+      if (!res.ok) throw new Error('Fetch failed ' + res.status);
+    } catch (err) {
+      document.getElementById('loading').textContent = 'Error fetching FPL API: ' + err.message + '. If CORS blocks this in your browser, run from a local server or use a CORS proxy.';
+      return;
+    }
+
+    const data = await res.json();
+    // elements array contains players
+    const elements = data.elements || [];
+    // team_code mapping: some objects use 'team_code', some use 'team'
+    // fill rows
+    const tbody = document.getElementById('bodyRows');
+    elements.forEach(el => {
+      const tr = document.createElement('tr');
+      COLUMNS.forEach(col => {
+        const td = document.createElement('td');
+        try {
+          const val = col.key(el);
+          td.textContent = (val === null || val === undefined) ? '-' : val;
+        } catch(e) {
+          td.textContent = '-';
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+
+    // Initialize DataTable with column filters
+    const table = $('#players').DataTable({
+      dom: 'Bfrtip',
+      buttons: [
+        { extend: 'csvHtml5', text: 'Export CSV', filename: 'fpl_players_bootstrap_static' }
+      ],
+      pageLength: 25,
+      order: [[4, 'desc']], // default order by Total Points
+      columnDefs: [
+        { targets: [0,1,2], type: 'string' }
+      ],
+      scrollX: true
+    });
+
+    // attach per-column filtering (header inputs)
+    $('#players thead input').on('keyup change clear', function() {
+      const colIdx = $(this).closest('th').index();
+      table.column(colIdx).search(this.value).draw();
+    });
+
+    document.getElementById('loading').textContent = 'Loaded ' + elements.length + ' players.';
+  }
+
+  // Kick off
+  buildHeader();
+  loadAndPopulate();
+  </script>
+</body>
+</html>
